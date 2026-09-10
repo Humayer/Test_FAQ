@@ -1,0 +1,136 @@
+// Prisma schema for the DP HR FAQ Portal
+// Run `npx prisma generate` after any change, and `npx prisma migrate dev` to apply.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Core HR routing data
+// ---------------------------------------------------------------------------
+
+model FAQTopic {
+  id          String   @id @default(cuid())
+  purpose     String   @unique
+  department  String
+  // Comma separated synonyms / alternate phrasings used by the matching engine.
+  // Stored as a simple text column (one keyword per line) so it stays editable
+  // from the admin panel without needing a separate table for the common case.
+  keywords    String   @default("")
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  contacts    FAQTopicContact[]
+  messages    Message[]
+
+  @@index([purpose])
+  @@index([isActive])
+}
+
+model ContactPerson {
+  id          String   @id @default(cuid())
+  name        String
+  email       String?
+  department  String?
+  // Set when the imported email looks malformed/suspicious and needs a human
+  // to confirm or correct it before it is shown to employees.
+  needsReview Boolean  @default(false)
+  reviewNote  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  topics      FAQTopicContact[]
+
+  @@index([email])
+  @@index([needsReview])
+}
+
+model FAQTopicContact {
+  id              String   @id @default(cuid())
+  faqTopicId      String
+  contactPersonId String
+  createdAt       DateTime @default(now())
+
+  faqTopic        FAQTopic      @relation(fields: [faqTopicId], references: [id], onDelete: Cascade)
+  contactPerson   ContactPerson @relation(fields: [contactPersonId], references: [id], onDelete: Cascade)
+
+  @@unique([faqTopicId, contactPersonId])
+  @@index([faqTopicId])
+  @@index([contactPersonId])
+}
+
+// ---------------------------------------------------------------------------
+// Chat / conversation history
+// ---------------------------------------------------------------------------
+
+model Conversation {
+  id        String    @id @default(cuid())
+  sessionId String    @unique
+  userName  String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  messages  Message[]
+
+  @@index([sessionId])
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  role           MessageRole
+  content        String
+  // If this message resulted in (or represents) a matched FAQ topic, store it
+  // so we can build simple usage analytics later without re-running matching.
+  matchedTopicId String?
+  confidence     Float?
+  createdAt      DateTime     @default(now())
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  matchedTopic   FAQTopic?    @relation(fields: [matchedTopicId], references: [id])
+
+  @@index([conversationId])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Excel import history / audit trail
+// ---------------------------------------------------------------------------
+
+enum ImportStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+}
+
+model ImportBatch {
+  id           String       @id @default(cuid())
+  fileName     String
+  status       ImportStatus @default(PENDING_REVIEW)
+  totalRows    Int          @default(0)
+  validRows    Int          @default(0)
+  reviewRows   Int          @default(0)
+  invalidRows  Int          @default(0)
+  // Full parsed+validated preview, stored as JSON so the admin can review and
+  // confirm before anything touches FAQTopic/ContactPerson.
+  previewData  Json
+  createdAt    DateTime     @default(now())
+  approvedAt   DateTime?
+  approvedBy   String?
+
+  @@index([status])
+  @@index([createdAt])
+}
